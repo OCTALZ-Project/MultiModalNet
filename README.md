@@ -124,6 +124,20 @@ This script will automatically:
 
 ## Citation
 
+```
+@inproceedings{aydin2024retinal,
+  title={Retinal Disease Classification Using Optical Coherence Tomography Angiography Images},
+  author={Aydın, O. F. and Nazlı, M. S. and Tek, F. B. and Turkan, Y.},
+  booktitle={2024 9th International Conference on Computer Science and Engineering (UBMK)},
+  pages={884--889},
+  year={2024},
+  organization={IEEE},
+  address={Antalya, Turkiye},
+  doi={10.1109/UBMK63289.2024.10773610},
+  keywords={Visualization; Retinopathy; Optical coherence tomography; Angiography; Transfer learning; Retina; Transformers; Monitoring; Diseases; Residual neural networks; OCTA; ResNet50; Deep Learning; Retinal Diseases; Image Classification; Optical Coherence Tomography Angiography; Class Imbalance; k-Fold Cross-Validation}
+}
+```
+
 For the Masked Autoencoder (MAE) pre-training method:
 
 ```
