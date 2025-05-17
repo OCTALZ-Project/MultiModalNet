@@ -1,0 +1,17 @@
+*
+!.gitignore
+!README.md
+
+!dataset_loader.py
+!engine_finetune.py
+!main_finetune.py
+!model_multimodal.py
+!models_vit.py
+!requirements.txt
+!run_kfold.py
+
+!util/
+!util/**
+
+!models/
+!models/**
