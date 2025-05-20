@@ -46,12 +46,16 @@ DATASET/
 ├── train/
 │   ├── NORMAL/
 │   │   ├── patient_id/
-│   │   │   ├── OCTA(FULL)_*.bmp
-│   │   │   ├── OCTA(ILM_OPL)_*.bmp
-│   │   │   ├── OCTA(OPL_BM)_*.bmp
-│   │   │   ├── 200.bmp (B-scan)
-│   │   │   ├── 185.bmp (B-scan)
-│   │   │   └── 215.bmp (B-scan)
+│   │   │   ├── projection/
+│   │   │   │   ├── OCTA(FULL)_*.bmp/png/jpg
+│   │   │   │   ├── OCTA(ILM_OPL)_*.bmp/png/jpg
+│   │   │   │   └── OCTA(OPL_BM)_*.bmp/png/jpg
+│   │   │   │   or
+│   │   │   │   └── projection.bmp/png/jpg (single projection file)
+│   │   │   └── bscan/
+│   │   │       ├── 200.bmp/png/jpg (B-scan)
+│   │   │       ├── 185.bmp/png/jpg (B-scan)
+│   │   │       └── 215.bmp/png/jpg (B-scan)
 │   ├── AMD/
 │   └── DR/
 ├── val/
@@ -63,6 +67,12 @@ DATASET/
     ├── AMD/
     └── DR/
 ```
+
+The dataset loader supports:
+- Multiple image formats: BMP, PNG, JPG, and JPEG
+- Two projection directory structures:
+  1. Three specific OCTA projection files (FULL, ILM_OPL, OPL_BM)
+  2. Single generic projection file that will be used for all three channels
 
 For k-fold cross-validation, the data should be structured as:
 
@@ -88,11 +98,11 @@ python main_finetune.py \
     --blr 5e-5 \
     --layer_decay 0.75 \
     --weight_decay 0.05 \
-    --clip_grad 1.0 \ 
+    --clip_grad 1.0 \
     --data_path /path/to/your/data \
     --nb_classes 3 \
-    --vit_finetune finetune_model.pth \
-    --vit_global_pool avg \
+    --bscan_model_finetune finetune_model.pth \
+    --bscan_model_global_pool avg \
     --output_dir ./output/model \
     --log_dir ./output/logs \
     --num_workers 4 \

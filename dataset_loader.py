@@ -4,15 +4,17 @@ import torch
 from torch.utils.data import Dataset
 from torchvision import transforms
 from collections import Counter
+
 class OCTAMultiModalDataset(Dataset):
     def __init__(self, data_dir, num_classes, octa_transform=None, bscan_transform=None,
-                 class_name_map=None):
+                 class_name_map=None, verbose=False):
         """
         Initializes the dataset loader.
         Args:
             data_dir (str): Path to the data directory (e.g., 'DATASET/train', 'DATASET/val').
-            num_classes (int): Number of target classes (3 for NORMAL, AMD, DR;
-                            4 for NORMAL, AMD, DR, OTHERS).
+            num_classes (int): Number of target classes. The dataset will attempt to find this many
+                               classes in the directory structure. If the number doesn't match,
+                               a warning will be displayed.
             octa_transform (callable, optional): Optional transform to be applied on OCTA tensor.
             bscan_transform (callable, optional): Optional transform to be applied on B-scan tensor.
             class_name_map (dict, optional): A dictionary to map directory names on disk
@@ -20,21 +22,35 @@ class OCTAMultiModalDataset(Dataset):
                                             E.g., {"AGE_RELATED_MACULAR_DEGENERATION": "AMD"}.
                                             If None or a directory name is not in the map,
                                             the directory name itself (uppercased) is used as the class name.
+            verbose (bool, optional): If True, print detailed information during dataset loading.
         """
         self.data_dir = data_dir
         self.octa_transform = octa_transform
         self.bscan_transform = bscan_transform
         self.num_classes = num_classes
         self.class_name_map = class_name_map if class_name_map else {}
+        self.verbose = verbose
+        # Supported image extensions
+        self.supported_extensions = ['.bmp', '.png', '.jpg', '.jpeg']
 
-        if self.num_classes not in [3, 4]:
-            raise ValueError("num_classes must be 3 or 4.")
-
-        # Define expected model classes based on num_classes
-        if self.num_classes == 3:
-            self.expected_model_classes = ['NORMAL', 'AMD', 'DR']
-        else: # self.num_classes == 4
-            self.expected_model_classes = ['NORMAL', 'AMD', 'DR', 'OTHERS']
+        # Dynamically discover classes from directory structure
+        self.expected_model_classes = []
+        
+        # First scan through directories to collect available classes
+        for class_dir_on_disk in os.listdir(self.data_dir):
+            class_path = os.path.join(self.data_dir, class_dir_on_disk)
+            if os.path.isdir(class_path):
+                target_class_name = self.class_name_map.get(class_dir_on_disk, class_dir_on_disk.upper())
+                if target_class_name not in self.expected_model_classes:
+                    self.expected_model_classes.append(target_class_name)
+        
+        # If we couldn't find enough directories or found too many
+        if len(self.expected_model_classes) != self.num_classes:
+            print(f"Warning: Found {len(self.expected_model_classes)} class directories but num_classes is {self.num_classes}.")
+            print(f"Using discovered classes: {self.expected_model_classes}")
+            
+        # Sort classes to ensure consistent ordering
+        self.expected_model_classes.sort()
 
         self.class_to_idx = {name: i for i, name in enumerate(self.expected_model_classes)}
         self.idx_to_class = {i: name for name, i in self.class_to_idx.items()}
@@ -43,11 +59,13 @@ class OCTAMultiModalDataset(Dataset):
         self.labels = {} # Stores final mapped label for each subject_id
         self.subject_bscan_files = {}
         self.subject_full_paths = {} # Stores full path to subject directory
+        self.octa_files = {} # Stores paths to OCTA files for each subject
 
-        print(f"Loading data from directory: {self.data_dir} for {self.num_classes} classes.")
-        print(f"Expecting class directories corresponding to: {self.expected_model_classes}")
-        if self.class_name_map:
-            print(f"Using class name map: {self.class_name_map}")
+        if self.verbose:
+            print(f"Loading data from directory: {self.data_dir} for {self.num_classes} classes.")
+            print(f"Expecting class directories corresponding to: {self.expected_model_classes}")
+            if self.class_name_map:
+                print(f"Using class name map: {self.class_name_map}")
 
         if not os.path.isdir(self.data_dir):
             raise FileNotFoundError(f"Data directory not found: {self.data_dir}")
@@ -65,10 +83,12 @@ class OCTAMultiModalDataset(Dataset):
             target_class_name = self.class_name_map.get(class_dir_on_disk, class_dir_on_disk.upper())
 
             if target_class_name not in self.expected_model_classes:
-                print(f"  Skipping directory '{class_dir_on_disk}' (maps to '{target_class_name}') as it's not an expected class for num_classes={self.num_classes}.")
+                if self.verbose:
+                    print(f"  Skipping directory '{class_dir_on_disk}' (maps to '{target_class_name}') as it's not an expected class for num_classes={self.num_classes}.")
                 continue
             
-            print(f"  Processing class directory: '{class_dir_on_disk}' as '{target_class_name}'")
+            if self.verbose:
+                print(f"  Processing class directory: '{class_dir_on_disk}' as '{target_class_name}'")
 
             # Iterate through subject_id directories (e.g., 10001, 10002)
             for subject_id_str in os.listdir(class_path):
@@ -76,48 +96,62 @@ class OCTAMultiModalDataset(Dataset):
                 if not os.path.isdir(subject_path):
                     continue
 
-                # Check for OCTA files
-                octa_file_names_expected = [
-                    f'OCTA(FULL)_{subject_id_str}.bmp',
-                    f'OCTA(ILM_OPL)_{subject_id_str}.bmp',
-                    f'OCTA(OPL_BM)_{subject_id_str}.bmp'
-                ]
-                octa_files_present = all(os.path.exists(os.path.join(subject_path, fname)) for fname in octa_file_names_expected)
-
-                if not octa_files_present:
-                    # print(f"    Warning: Missing one or more OCTA files for ID {subject_id_str} in {subject_path}. Skipping.")
+                # New directory structure has projection and bscan subdirectories
+                projection_dir = os.path.join(subject_path, "projection")
+                bscan_dir = os.path.join(subject_path, "bscan")
+                
+                # Skip if either directory doesn't exist
+                if not (os.path.isdir(projection_dir) and os.path.isdir(bscan_dir)):
+                    if self.verbose:
+                        print(f"    Warning: Missing projection or bscan directory for ID {subject_id_str} in {subject_path}. Skipping.")
+                    continue
+                
+                # Check for OCTA files with any supported extension
+                octa_files = self._find_octa_files(projection_dir, subject_id_str)
+                if not octa_files or len(octa_files) != 3:
+                    if self.verbose:
+                        print(f"    Warning: Could not find suitable projection files for ID {subject_id_str} in {projection_dir}. Skipping.")
                     continue
 
-                # Find B-scan files (non-OCTA BMP files)
-                all_bmp_files_in_subject_dir = [f for f in os.listdir(subject_path) if f.lower().endswith('.bmp')]
-                current_bscan_files = []
-                for bmp_file in all_bmp_files_in_subject_dir:
-                    is_octa = False
-                    # Check if the bmp_file matches any OCTA naming patterns
-                    for octa_pattern_part in ['OCTA(FULL)', 'OCTA(ILM_OPL)', 'OCTA(OPL_BM)']:
-                        if octa_pattern_part in bmp_file and f"_{subject_id_str}.bmp" in bmp_file:
-                            is_octa = True
-                            break
-                    if not is_octa:
-                        current_bscan_files.append(bmp_file)
-                
-                if len(current_bscan_files) != 3:
-                    # print(f"    Warning: Found {len(current_bscan_files)} non-OCTA BMP files (expected 3) for ID {subject_id_str} in {subject_path}. Skipping.")
+                # Find B-scan files in the bscan directory
+                bscan_files = self._find_bscan_files(bscan_dir)
+                if len(bscan_files) != 3:
+                    if self.verbose:
+                        print(f"    Warning: Found {len(bscan_files)} B-scan files (expected 3) for ID {subject_id_str} in {bscan_dir}. Skipping.")
                     continue
                 
                 try:
                     # Sort B-scan files numerically by their name (e.g., '185.bmp', '200.bmp', '215.bmp')
-                    current_bscan_files.sort(key=lambda x: int(os.path.splitext(x)[0]))
+                    bscan_files.sort(key=lambda x: int(os.path.splitext(os.path.basename(x))[0]))
                 except ValueError:
-                    # print(f"    Warning: Could not sort B-scan filenames numerically for ID {subject_id_str} in {subject_path} (files: {current_bscan_files}). Skipping.")
+                    if self.verbose:
+                        print(f"    Warning: Could not sort B-scan filenames numerically for ID {subject_id_str}. Skipping.")
                     continue
 
                 # If all checks pass, add the subject
                 self.ids.append(subject_id_str)
                 self.labels[subject_id_str] = target_class_name # Store the mapped class name
-                self.subject_bscan_files[subject_id_str] = current_bscan_files
+                self.subject_bscan_files[subject_id_str] = [os.path.basename(f) for f in bscan_files]
                 self.subject_full_paths[subject_id_str] = subject_path
-                # print(f"      Added subject: {subject_id_str} with label '{target_class_name}'")
+                self.octa_files[subject_id_str] = octa_files
+                if self.verbose:
+                    # Get the types of projection files (specific OCTA or generic)
+                    projection_types = []
+                    for path in octa_files:
+                        filename = os.path.basename(path)
+                        if "OCTA(FULL)" in filename:
+                            projection_types.append("FULL")
+                        elif "OCTA(ILM_OPL)" in filename:
+                            projection_types.append("ILM_OPL")
+                        elif "OCTA(OPL_BM)" in filename:
+                            projection_types.append("OPL_BM")
+                        else:
+                            projection_types.append("Generic")
+                    
+                    if len(set(projection_types)) == 1 and projection_types[0] == "Generic":
+                        print(f"      Added subject: {subject_id_str} with label '{target_class_name}' (using generic projection)")
+                    else:
+                        print(f"      Added subject: {subject_id_str} with label '{target_class_name}' (using specific OCTA projections)")
 
         if not self.ids:
             print(f"Warning: No valid samples found in {self.data_dir} matching the criteria for {self.num_classes} classes.")
@@ -125,6 +159,78 @@ class OCTAMultiModalDataset(Dataset):
             print(f"Dataset loaded from {self.data_dir}.")
             print(f"Total {len(self.ids)} valid samples found and loaded.")
             print(f"Class distribution in this dataset: {Counter(self.labels.values())}")
+
+    def _find_octa_files(self, projection_dir, subject_id_str):
+        """Find OCTA files with any supported extension in the projection directory.
+        
+        If specific OCTA files (FULL, ILM_OPL, OPL_BM) are found, they are returned.
+        If only a single generic projection file is found, it is used for all three channels.
+        """
+        octa_files = {'OCTA(FULL)': None, 'OCTA(ILM_OPL)': None, 'OCTA(OPL_BM)': None}
+        
+        # List all files in the projection directory
+        files_in_dir = [f for f in os.listdir(projection_dir) 
+                      if os.path.isfile(os.path.join(projection_dir, f)) and
+                      any(f.lower().endswith(ext) for ext in self.supported_extensions)]
+        
+        # First, try to find the specific OCTA files
+        for filename in files_in_dir:
+            file_path = os.path.join(projection_dir, filename)
+                
+            # Check if the file matches any OCTA pattern
+            for pattern in octa_files.keys():
+                if pattern in filename and subject_id_str in filename:
+                    octa_files[pattern] = file_path
+                    break
+        
+        # If all three specific OCTA files were found, return them
+        if all(octa_files.values()):
+            return list(octa_files.values())
+        
+        # If not all specific OCTA files were found, look for a single generic projection file
+        # Common names for generic projection files
+        generic_names = ['projection', 'oct', 'scan', 'image', 'octa']
+        
+        # Reset and look for a generic projection file
+        generic_projection = None
+        for filename in files_in_dir:
+            file_base = os.path.splitext(filename.lower())[0]
+            if any(name in file_base for name in generic_names):
+                generic_projection = os.path.join(projection_dir, filename)
+                break
+        
+        # If no named file is found, just take the first image file
+        if not generic_projection and files_in_dir:
+            generic_projection = os.path.join(projection_dir, files_in_dir[0])
+        
+        # If a generic projection file is found, duplicate it for all three channels
+        if generic_projection:
+            return [generic_projection, generic_projection, generic_projection]
+            
+        # If no suitable files were found, return an empty list
+        return []
+
+    def _find_bscan_files(self, bscan_dir):
+        """Find B-scan files with any supported extension in the bscan directory."""
+        bscan_files = []
+        
+        # List all files in the bscan directory
+        for filename in os.listdir(bscan_dir):
+            file_path = os.path.join(bscan_dir, filename)
+            if not os.path.isfile(file_path):
+                continue
+                
+            # Check if the file has a supported extension
+            if any(filename.lower().endswith(ext) for ext in self.supported_extensions):
+                try:
+                    # Try to parse the filename as a number (typical for B-scans like 185.bmp)
+                    int(os.path.splitext(filename)[0])
+                    bscan_files.append(file_path)
+                except ValueError:
+                    # If filename can't be converted to int, it might not be a B-scan file
+                    pass
+                    
+        return bscan_files
 
     def __len__(self):
         return len(self.ids)
@@ -136,15 +242,20 @@ class OCTAMultiModalDataset(Dataset):
         
         to_tensor = transforms.ToTensor() # Basic conversion to tensor if no other transform
 
-        # --- Load OCTA images ---
+        # --- Load OCTA images from saved paths ---
         try:
-            octa_full_path = os.path.join(subject_dir, f'OCTA(FULL)_{subject_id}.bmp')
-            octa_ilm_opl_path = os.path.join(subject_dir, f'OCTA(ILM_OPL)_{subject_id}.bmp')
-            octa_opl_bm_path = os.path.join(subject_dir, f'OCTA(OPL_BM)_{subject_id}.bmp')
+            octa_paths = self.octa_files[subject_id]
+            if len(octa_paths) != 3:
+                raise RuntimeError(f"Expected 3 OCTA/projection paths for subject {subject_id}, but found {len(octa_paths)}")
 
-            img_octa_full = Image.open(octa_full_path).convert('L')
-            img_octa_ilm_opl = Image.open(octa_ilm_opl_path).convert('L')
-            img_octa_opl_bm = Image.open(octa_opl_bm_path).convert('L')
+            # Check if we're using a single generic projection (all paths are the same)
+            using_generic_projection = octa_paths[0] == octa_paths[1] == octa_paths[2]
+            if using_generic_projection and self.verbose:
+                print(f"Loading generic projection file for subject {subject_id}: {os.path.basename(octa_paths[0])}")
+
+            img_octa_full = Image.open(octa_paths[0]).convert('L')
+            img_octa_ilm_opl = Image.open(octa_paths[1]).convert('L')
+            img_octa_opl_bm = Image.open(octa_paths[2]).convert('L')
 
             # Convert to tensor before stacking
             t_octa_full = to_tensor(img_octa_full)
@@ -153,20 +264,22 @@ class OCTAMultiModalDataset(Dataset):
             
             octa_image_tensor = torch.cat([t_octa_full, t_octa_ilm_opl, t_octa_opl_bm], dim=0)
         except FileNotFoundError as e:
-            raise RuntimeError(f"Error loading OCTA for ID {subject_id} from {subject_dir}: File not found - {e}")
+            raise RuntimeError(f"Error loading projection/OCTA for ID {subject_id} from {subject_dir}: File not found - {e}")
         except Exception as e:
-            raise RuntimeError(f"Error loading or processing OCTA for ID {subject_id} from {subject_dir}: {e}")
+            raise RuntimeError(f"Error loading or processing projection/OCTA for ID {subject_id} from {subject_dir}: {e}")
 
-        # --- Load B-scan images ---
+        # --- Load B-scan images from the bscan subdirectory ---
         try:
             bscan_filenames = self.subject_bscan_files[subject_id]
+            bscan_dir = os.path.join(subject_dir, "bscan")
+            
             # Ensure we have exactly 3 B-scan filenames stored
             if len(bscan_filenames) != 3:
                 raise RuntimeError(f"Expected 3 B-scan filenames for subject {subject_id}, but found {len(bscan_filenames)}: {bscan_filenames}")
 
-            bscan_1_path = os.path.join(subject_dir, bscan_filenames[0])
-            bscan_2_path = os.path.join(subject_dir, bscan_filenames[1])
-            bscan_3_path = os.path.join(subject_dir, bscan_filenames[2])
+            bscan_1_path = os.path.join(bscan_dir, bscan_filenames[0])
+            bscan_2_path = os.path.join(bscan_dir, bscan_filenames[1])
+            bscan_3_path = os.path.join(bscan_dir, bscan_filenames[2])
 
             img_bscan_1 = Image.open(bscan_1_path).convert('L')
             img_bscan_2 = Image.open(bscan_2_path).convert('L')
@@ -179,9 +292,9 @@ class OCTAMultiModalDataset(Dataset):
 
             bscan_image_tensor = torch.cat([t_bscan_1, t_bscan_2, t_bscan_3], dim=0)
         except FileNotFoundError as e:
-            raise RuntimeError(f"Error loading B-scan for ID {subject_id} from {subject_dir}: File not found - {e}")
+            raise RuntimeError(f"Error loading B-scan for ID {subject_id} from {bscan_dir}: File not found - {e}")
         except Exception as e:
-            raise RuntimeError(f"Error loading or processing B-scan for ID {subject_id} from {subject_dir}: {e}")
+            raise RuntimeError(f"Error loading or processing B-scan for ID {subject_id} from {bscan_dir}: {e}")
 
         # Apply transforms if they exist
         if self.octa_transform:
@@ -189,7 +302,7 @@ class OCTAMultiModalDataset(Dataset):
         if self.bscan_transform:
             bscan_image_tensor = self.bscan_transform(bscan_image_tensor)
 
-        disease_name = self.labels[subject_id] # This is 'NORMAL', 'AMD', 'DR', or 'OTHERS'
-        label_idx = self.class_to_idx[disease_name]
+        class_name = self.labels[subject_id] # The class name for this subject
+        label_idx = self.class_to_idx[class_name]
         
         return (octa_image_tensor, bscan_image_tensor), label_idx

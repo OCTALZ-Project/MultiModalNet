@@ -11,7 +11,7 @@
 !run_kfold.py
 
 !util/
-!util/**
+util/__pycache__/
 
 !models/
-!models/**
+models/__pycache__/
