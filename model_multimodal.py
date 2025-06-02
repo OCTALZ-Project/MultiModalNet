@@ -7,7 +7,7 @@ from models import ResNetEncoder, AlexNetEncoder, ViTEncoder
 class MultiModalNet(nn.Module):
     def __init__(self, num_classes, projection_maps_model_finetune_path=None, bscan_model_finetune_path=None,
                  bscan_model_name='vit_base_patch16', bscan_model_global_pool="avg", bscan_model_drop_path_rate=0.1, bscan_model_input_size=224,
-                 projection_maps_model='resnet50', projection_maps_model_dropout=0.0):
+                 projection_maps_model='resnet50', projection_maps_model_dropout=0.0, bscan_model_dropout=0.0):
         super().__init__()
         self.num_classes = num_classes
 
@@ -17,7 +17,7 @@ class MultiModalNet(nn.Module):
                 finetune_path=projection_maps_model_finetune_path,
                 dropout=projection_maps_model_dropout
             )
-        elif projection_maps_model in ['resnet50', 'resnet101']:
+        elif projection_maps_model in ['resnet50', 'resnet101', 'resnet152']:
             self.projection_maps_encoder = ResNetEncoder(
                 model_type=projection_maps_model,
                 finetune_path=projection_maps_model_finetune_path,
@@ -40,9 +40,20 @@ class MultiModalNet(nn.Module):
             raise ValueError(f"Unsupported model: {projection_maps_model}. Choose 'resnet50', 'resnet101', 'alexnet', or 'dino_vit'.")
         self.projection_maps_feature_dim = self.projection_maps_encoder.feature_dim
 
-        # ViT encoder for B-scan images
-        if bscan_model_name.startswith('dino_vit_'):
-            from models.dino_vit import DinoViTEncoder  # Local import to avoid unnecessary DINOv2 warnings
+        # ViT/ResNet/AlexNet encoder for B-scan images
+        if bscan_model_name in ['resnet50', 'resnet101', 'resnet152']:
+            self.bscan_encoder = ResNetEncoder(
+                model_type=bscan_model_name,
+                finetune_path=bscan_model_finetune_path,
+                dropout=bscan_model_dropout
+            )
+        elif bscan_model_name == 'alexnet':
+            self.bscan_encoder = AlexNetEncoder(
+                finetune_path=bscan_model_finetune_path,
+                dropout=bscan_model_dropout
+            )
+        elif bscan_model_name.startswith('dino_vit_'):
+            from models.dino_vit import DinoViTEncoder
             dino_model_name = bscan_model_name.replace('dino_vit_', 'vit_')
             self.bscan_encoder = DinoViTEncoder(
                 model_name=dino_model_name,
@@ -80,13 +91,14 @@ class MultiModalNet(nn.Module):
 
     def get_param_groups(self, base_lr, weight_decay, layer_decay_rate=None):
         param_groups = []
-        
         # OCTA encoder parameters
         param_groups.extend(self.projection_maps_encoder.get_param_groups(base_lr, weight_decay))
-        
-        # B-scan encoder parameters with potential layer-wise decay
-        param_groups.extend(self.bscan_encoder.get_param_groups(base_lr, weight_decay, layer_decay_rate))
-
+        # B-scan encoder parameters (ViT için layer_decay_rate, diğerleri için değil)
+        from models import ViTEncoder
+        if isinstance(self.bscan_encoder, ViTEncoder):
+            param_groups.extend(self.bscan_encoder.get_param_groups(base_lr, weight_decay, layer_decay_rate))
+        else:
+            param_groups.extend(self.bscan_encoder.get_param_groups(base_lr, weight_decay))
         # Fusion FC parameters (classifier head)
         fusion_params_no_decay = []
         fusion_params_decay = []
@@ -97,8 +109,6 @@ class MultiModalNet(nn.Module):
                 fusion_params_no_decay.append(param)
             else:
                 fusion_params_decay.append(param)
-        # Classifier head often benefits from a higher LR
         param_groups.append({'params': fusion_params_decay, 'lr': base_lr * 2.0, 'weight_decay': weight_decay}) 
         param_groups.append({'params': fusion_params_no_decay, 'lr': base_lr * 2.0, 'weight_decay': 0.0})
-        
         return param_groups

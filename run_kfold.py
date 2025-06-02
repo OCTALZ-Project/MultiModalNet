@@ -38,9 +38,10 @@ def main():
         '--bscan_model_global_pool', 'avg',
         '--num_workers', '4',
         '--pin_mem',
-        '--projection_maps_model_dropout', '0.1',
-        '--projection_maps_model', 'resnet101',
-        '--bscan_model_name', 'vit_large_patch16',
+        '--projection_maps_model_dropout', '0.15',
+        '--projection_maps_model', 'resnet152',
+        '--bscan_model_dropout', '0.15',
+        '--bscan_model_name', 'resnet152',
         '--use_tensorboard'
     ]
 
@@ -48,7 +49,7 @@ def main():
     base_data_path = "/home/omerfarukaydin/Desktop/ad-reduced-cn-5-fold-dataset"
 
     # Base output and log directory (added _py to distinguish from shell script outputs)
-    base_output_log_prefix = "FINETUNE/2025-06-02-ad-cn-OCT-augmented-both"
+    base_output_log_prefix = "FINETUNE/2025-06-02-resnet152-both-ad-cn-OCT-augmented-both"
 
     # Number of folds
     num_folds = 5  # Set to 5 for your kfold_dataset structure

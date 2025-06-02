@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 import torchvision.models as models
-from torchvision.models import ResNet50_Weights, ResNet101_Weights
+from torchvision.models import ResNet50_Weights, ResNet101_Weights, ResNet152_Weights
 import os
 
 class ResNetEncoder(nn.Module):
@@ -22,8 +22,13 @@ class ResNetEncoder(nn.Module):
             imagenet_weights = ResNet101_Weights.IMAGENET1K_V1
             self.feature_dim = self.encoder.fc.in_features
             print("Using ResNet101 architecture for encoding")
+        elif model_type == 'resnet152':
+            self.encoder = models.resnet152(weights=None)
+            imagenet_weights = ResNet152_Weights.IMAGENET1K_V1
+            self.feature_dim = self.encoder.fc.in_features
+            print("Using ResNet152 architecture for encoding")
         else:
-            raise ValueError(f"Unsupported ResNet model: {model_type}. Choose 'resnet50' or 'resnet101'.")
+            raise ValueError(f"Unsupported ResNet model: {model_type}. Choose 'resnet50', 'resnet101', or 'resnet152'.")
             
         # Load weights - either custom or ImageNet pretrained
         if finetune_path and os.path.exists(finetune_path):
@@ -75,4 +80,4 @@ class ResNetEncoder(nn.Module):
             {'params': params_no_decay, 'lr': base_lr, 'weight_decay': 0.0}
         ]
         
-        return param_groups 
+        return param_groups

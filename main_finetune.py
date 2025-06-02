@@ -44,15 +44,18 @@ def get_args_parser():
 
     # Model parameters
     parser.add_argument('--bscan_model_name', default='vit_base_patch16', type=str, metavar='MODEL',
-                        help='Name of ViT model component to use (e.g., vit_base_patch16, vit_large_patch16, dino_vit_base, dino_vit_large)')
-    parser.add_argument('--projection_maps_model', default='resnet50', type=str, choices=['resnet50', 'resnet101', 'alexnet', 'dino_vit'],
-                        help='ResNet architecture to use for OCTA encoding (resnet50, resnet101, alexnet, dino_vit)')
+                        choices=['vit_base_patch16', 'vit_large_patch16', 'vit_huge_patch14', 'dino_vit_base', 'dino_vit_large', 'resnet50', 'resnet101', 'resnet152', 'alexnet'],
+                        help='Name of model component to use for B-scan (vit_base_patch16, vit_large_patch16, dino_vit_base, dino_vit_large, resnet50, resnet101, resnet152, alexnet)')
+    parser.add_argument('--bscan_model_dropout', type=float, default=0.0,
+                        help='Dropout rate applied after B-scan encoder (default: 0.0, no dropout)')
+    parser.add_argument('--bscan_model_finetune', default='', type=str,
+                        help='Finetune B-scan encoder from this checkpoint path. If empty, uses ImageNet weights.')
+    parser.add_argument('--projection_maps_model', default='resnet50', type=str, choices=['resnet50', 'resnet101', 'resnet152', 'alexnet', 'dino_vit'],
+                        help='ResNet architecture to use for OCTA encoding (resnet50, resnet101, resnet152, alexnet, dino_vit)')
     parser.add_argument('--projection_maps_model_dropout', type=float, default=0.0,
                         help='Dropout rate applied after ResNet feature extraction (default: 0.0, no dropout)')
     parser.add_argument('--projection_maps_model_finetune', default='', type=str,
                         help='Finetune ResNet from this checkpoint path. If empty, uses ImageNet weights.')
-    parser.add_argument('--bscan_model_finetune', default='',
-                        help='Finetune ViT from MAE checkpoint (or other ViT pretrain)')
 
     parser.add_argument('--input_size', default=224, type=int,
                         help='images input size')
@@ -243,13 +246,13 @@ def main(args):
 
     normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
     transform_train = transforms.Compose([
-        transforms.RandomResizedCrop(args.input_size, scale=(0.8, 1.0), ratio=(0.9, 1.1)),
-        transforms.RandomHorizontalFlip(),
+        # transforms.RandomResizedCrop(args.input_size, scale=(0.8, 1.0), ratio=(0.9, 1.1)),
+        # transforms.RandomHorizontalFlip(),
         normalize,
     ])
     transform_val = transforms.Compose([
-        transforms.Resize(int(args.input_size / 0.875)),
-        transforms.CenterCrop(args.input_size),
+        # transforms.Resize(int(args.input_size / 0.875)),
+        # transforms.CenterCrop(args.input_size),
         normalize,
     ])
 
@@ -379,7 +382,8 @@ def main(args):
         bscan_model_drop_path_rate=args.bscan_model_drop_path_rate,
         bscan_model_input_size=args.input_size,
         projection_maps_model=args.projection_maps_model,
-        projection_maps_model_dropout=args.projection_maps_model_dropout
+        projection_maps_model_dropout=args.projection_maps_model_dropout,
+        bscan_model_dropout=args.bscan_model_dropout
     )
     model.to(device)
     model_without_ddp = model
