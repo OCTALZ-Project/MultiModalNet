@@ -1,17 +1,5 @@
-*
-!.gitignore
-!README.md
+FINETUNE
 
-!dataset_loader.py
-!engine_finetune.py
-!main_finetune.py
-!model_multimodal.py
-!models_vit.py
-!requirements.txt
-!run_kfold.py
+__pycache__/
 
-!util/
-util/__pycache__/
-
-!models/
-models/__pycache__/
+FINETUNE.md

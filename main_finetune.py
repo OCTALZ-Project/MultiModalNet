@@ -6,6 +6,8 @@ import os
 import time
 import shutil
 from pathlib import Path
+import matplotlib.pyplot as plt
+import seaborn as sns
 
 import torch
 import torch.backends.cudnn as cudnn
@@ -30,6 +32,7 @@ from engine_finetune import train_one_epoch, evaluate
 from sklearn.metrics import classification_report, confusion_matrix, accuracy_score
 import seaborn as sns
 import matplotlib.pyplot as plt
+import pandas as pd
 
 def get_args_parser():
     parser = argparse.ArgumentParser('Multi-modal fine-tuning for image classification', add_help=False)
@@ -41,9 +44,9 @@ def get_args_parser():
 
     # Model parameters
     parser.add_argument('--bscan_model_name', default='vit_base_patch16', type=str, metavar='MODEL',
-                        help='Name of ViT model component to use (e.g., vit_base_patch16, vit_large_patch16)')
-    parser.add_argument('--projection_maps_model', default='resnet50', type=str, choices=['resnet50', 'resnet101', 'alexnet'],
-                        help='ResNet architecture to use for OCTA encoding (resnet50 or resnet101)')
+                        help='Name of ViT model component to use (e.g., vit_base_patch16, vit_large_patch16, dino_vit_base, dino_vit_large)')
+    parser.add_argument('--projection_maps_model', default='resnet50', type=str, choices=['resnet50', 'resnet101', 'alexnet', 'dino_vit'],
+                        help='ResNet architecture to use for OCTA encoding (resnet50, resnet101, alexnet, dino_vit)')
     parser.add_argument('--projection_maps_model_dropout', type=float, default=0.0,
                         help='Dropout rate applied after ResNet feature extraction (default: 0.0, no dropout)')
     parser.add_argument('--projection_maps_model_finetune', default='', type=str,
@@ -158,6 +161,73 @@ def plot_confusion_matrix(cm, class_names, output_path="confusion_matrix.png"):
         print(f"Error saving confusion matrix: {e}")
     plt.close(fig)
 
+def save_prediction_results(predictions, targets, subject_ids, class_names, output_dir, dataset_type="validation"):
+    """
+    Save correctly and incorrectly predicted samples to CSV files.
+    
+    Args:
+        predictions: Array of predicted class indices
+        targets: Array of true class indices
+        subject_ids: List of subject IDs
+        class_names: List of class names
+        output_dir: Directory to save results
+        dataset_type: Type of dataset (e.g., "validation", "test")
+    """
+    try:
+        # Create results dataframe
+        results_df = pd.DataFrame({
+            'subject_id': subject_ids,
+            'true_label_idx': targets,
+            'predicted_label_idx': predictions,
+            'true_label': [class_names[idx] for idx in targets],
+            'predicted_label': [class_names[idx] for idx in predictions],
+            'correct_prediction': predictions == targets
+        })
+        
+        # Save all predictions
+        all_predictions_file = os.path.join(output_dir, f"{dataset_type}_all_predictions.csv")
+        results_df.to_csv(all_predictions_file, index=False)
+        print(f"All predictions saved to {all_predictions_file}")
+        
+        # Filter correctly predicted samples
+        correct_predictions = results_df[results_df['correct_prediction'] == True]
+        correct_file = os.path.join(output_dir, f"{dataset_type}_correctly_predicted.csv")
+        correct_predictions.to_csv(correct_file, index=False)
+        print(f"Correctly predicted samples ({len(correct_predictions)}) saved to {correct_file}")
+        
+        # Filter incorrectly predicted samples
+        incorrect_predictions = results_df[results_df['correct_prediction'] == False]
+        incorrect_file = os.path.join(output_dir, f"{dataset_type}_incorrectly_predicted.csv")
+        incorrect_predictions.to_csv(incorrect_file, index=False)
+        print(f"Incorrectly predicted samples ({len(incorrect_predictions)}) saved to {incorrect_file}")
+        
+        # Print summary
+        total_samples = len(results_df)
+        correct_count = len(correct_predictions)
+        incorrect_count = len(incorrect_predictions)
+        accuracy_percent = (correct_count / total_samples) * 100 if total_samples > 0 else 0
+        
+        print(f"\nPrediction Summary for {dataset_type} set:")
+        print(f"Total samples: {total_samples}")
+        print(f"Correctly predicted: {correct_count} ({accuracy_percent:.2f}%)")
+        print(f"Incorrectly predicted: {incorrect_count} ({100 - accuracy_percent:.2f}%)")
+        
+        # Print class-wise accuracy
+        print(f"\nClass-wise accuracy:")
+        for class_idx, class_name in enumerate(class_names):
+            class_mask = results_df['true_label_idx'] == class_idx
+            class_samples = results_df[class_mask]
+            if len(class_samples) > 0:
+                class_correct = len(class_samples[class_samples['correct_prediction'] == True])
+                class_accuracy = (class_correct / len(class_samples)) * 100
+                print(f"  {class_name}: {class_correct}/{len(class_samples)} ({class_accuracy:.2f}%)")
+        
+        return True
+        
+    except Exception as e:
+        print(f"Error saving prediction results: {e}")
+        return False
+
 def main(args):
     misc.init_distributed_mode(args)
 
@@ -185,7 +255,6 @@ def main(args):
 
     train_data_path = os.path.join(args.data_path, 'train')
     val_data_path = os.path.join(args.data_path, 'val')
-    test_data_path = os.path.join(args.data_path, 'test')
 
     dataset_train = OCTAMultiModalDataset(
         data_dir=train_data_path,
@@ -195,12 +264,6 @@ def main(args):
     )
     dataset_val = OCTAMultiModalDataset(
         data_dir=val_data_path,
-        num_classes=args.nb_classes,
-        octa_transform=transform_val,
-        bscan_transform=transform_val
-    )
-    dataset_test = OCTAMultiModalDataset(
-        data_dir=test_data_path,
         num_classes=args.nb_classes,
         octa_transform=transform_val,
         bscan_transform=transform_val
@@ -365,7 +428,7 @@ def main(args):
         print("\n" + "="*30 + " Evaluation Mode " + "="*30)
         test_stats = evaluate(data_loader_val, model, device, 
                               num_classes=args.nb_classes, class_names=class_names, 
-                              detailed_report=True) # <<< DETAILED REPORT TRUE
+                              detailed_report=True, return_predictions=True) # <<< DETAILED REPORT TRUE + RETURN_PREDICTIONS TRUE
         
         # Accuracy yazdırma (acc1 veya sklearn'den gelen)
         eval_acc = test_stats.get('overall_accuracy_sklearn', test_stats.get('acc1', 0))
@@ -386,6 +449,24 @@ def main(args):
                     f.write("="*50 + "\n")
                     f.write(report_str)
                 print(f"Classification report saved to {report_filename}")
+            
+            # Save prediction results for evaluation mode
+            predictions = test_stats.get('predictions')
+            targets = test_stats.get('targets')
+            subject_ids = test_stats.get('subject_ids')
+            
+            if predictions is not None and targets is not None and subject_ids is not None:
+                print(f"\n" + "="*50)
+                print("Saving detailed prediction results...")
+                save_prediction_results(
+                    predictions=predictions,
+                    targets=targets,
+                    subject_ids=subject_ids,
+                    class_names=class_names,
+                    output_dir=args.output_dir,
+                    dataset_type="evaluation"
+                )
+                print("="*50)
         exit(0)
 
     print(f"Start training for {args.epochs} epochs")
@@ -491,8 +572,8 @@ def main(args):
     if args.distributed:
         torch.distributed.barrier()
 
-    # concat test set and val set (dataset_val + dataset_test)
-    dataset_final_evaluation = torch.utils.data.ConcatDataset([dataset_val, dataset_test])
+    # Use only validation set for final evaluation
+    dataset_final_evaluation = dataset_val
     sampler_final_evaluation = torch.utils.data.SequentialSampler(dataset_final_evaluation)
     data_loader_final_evaluation = torch.utils.data.DataLoader(
         dataset_final_evaluation, sampler=sampler_final_evaluation,
@@ -503,7 +584,7 @@ def main(args):
     )
     final_test_stats = evaluate(data_loader_final_evaluation, model, device, 
                                 num_classes=args.nb_classes, class_names=class_names, 
-                                detailed_report=True) # <<< DETAILED REPORT TRUE
+                                detailed_report=True, return_predictions=True) # <<< DETAILED REPORT TRUE + RETURN_PREDICTIONS TRUE
     
     final_acc = final_test_stats.get('overall_accuracy_sklearn', final_test_stats.get('acc1', 0))
     print(f"Final accuracy of the (best/last) model on the {len(dataset_final_evaluation)} validation images: {final_acc * 100:.2f}%")
@@ -522,6 +603,24 @@ def main(args):
                 f.write("="*50 + "\n")
                 f.write(report_str)
             print(f"Final validation classification report saved to {report_filename}")
+        
+        # Save prediction results
+        predictions = final_test_stats.get('predictions')
+        targets = final_test_stats.get('targets')
+        subject_ids = final_test_stats.get('subject_ids')
+        
+        if predictions is not None and targets is not None and subject_ids is not None:
+            print(f"\n" + "="*50)
+            print("Saving detailed prediction results...")
+            save_prediction_results(
+                predictions=predictions,
+                targets=targets,
+                subject_ids=subject_ids,
+                class_names=class_names,
+                output_dir=args.output_dir,
+                dataset_type="final_validation"
+            )
+            print("="*50)
 
 if __name__ == '__main__':
     args = get_args_parser()

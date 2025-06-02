@@ -11,7 +11,7 @@ class MultiModalNet(nn.Module):
         super().__init__()
         self.num_classes = num_classes
 
-        # Encoder for OCTA images - support ResNet50, ResNet101, or AlexNet
+        # Encoder for OCTA images - support ResNet50, ResNet101, AlexNet, DinoViT
         if projection_maps_model == 'alexnet':
             self.projection_maps_encoder = AlexNetEncoder(
                 finetune_path=projection_maps_model_finetune_path,
@@ -23,21 +23,41 @@ class MultiModalNet(nn.Module):
                 finetune_path=projection_maps_model_finetune_path,
                 dropout=projection_maps_model_dropout
             )
+        elif projection_maps_model == 'dino_vit':
+            from models.dino_vit import DinoViTEncoder  # Local import to avoid unnecessary DINOv2 warnings
+            # Use bscan_model_name to determine the DINOv2 architecture
+            dino_model_name = bscan_model_name
+            if dino_model_name.startswith('dino_vit_'):
+                dino_model_name = dino_model_name.replace('dino_vit_', 'vit_')
+            else:
+                dino_model_name = 'vit_base'  # fallback
+            self.projection_maps_encoder = DinoViTEncoder(
+                model_name=dino_model_name,
+                finetune_path=projection_maps_model_finetune_path,
+                input_size=bscan_model_input_size
+            )
         else:
-            raise ValueError(f"Unsupported model: {projection_maps_model}. Choose 'resnet50', 'resnet101', or 'alexnet'.")
-        
+            raise ValueError(f"Unsupported model: {projection_maps_model}. Choose 'resnet50', 'resnet101', 'alexnet', or 'dino_vit'.")
         self.projection_maps_feature_dim = self.projection_maps_encoder.feature_dim
 
         # ViT encoder for B-scan images
-        self.bscan_encoder = ViTEncoder(
-            model_name=bscan_model_name,
-            finetune_path=bscan_model_finetune_path,
-            input_size=bscan_model_input_size,
-            global_pool=bscan_model_global_pool,
-            drop_path_rate=bscan_model_drop_path_rate,
-            num_classes=self.num_classes
-        )
-        
+        if bscan_model_name.startswith('dino_vit_'):
+            from models.dino_vit import DinoViTEncoder  # Local import to avoid unnecessary DINOv2 warnings
+            dino_model_name = bscan_model_name.replace('dino_vit_', 'vit_')
+            self.bscan_encoder = DinoViTEncoder(
+                model_name=dino_model_name,
+                finetune_path=bscan_model_finetune_path,
+                input_size=bscan_model_input_size
+            )
+        else:
+            self.bscan_encoder = ViTEncoder(
+                model_name=bscan_model_name,
+                finetune_path=bscan_model_finetune_path,
+                input_size=bscan_model_input_size,
+                global_pool=bscan_model_global_pool,
+                drop_path_rate=bscan_model_drop_path_rate,
+                num_classes=self.num_classes
+            )
         self.bscan_feature_dim = self.bscan_encoder.feature_dim
 
         # Fusion layer for both modalities

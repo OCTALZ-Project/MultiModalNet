@@ -99,7 +99,7 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
 
 
 @torch.no_grad()
-def evaluate(data_loader, model, device, num_classes, class_names=None, detailed_report=False): # detailed_report eklendi
+def evaluate(data_loader, model, device, num_classes, class_names=None, detailed_report=False, return_predictions=False): # detailed_report ve return_predictions eklendi
     criterion = torch.nn.CrossEntropyLoss()
 
     metric_logger = misc.MetricLogger(delimiter="  ")
@@ -109,6 +109,7 @@ def evaluate(data_loader, model, device, num_classes, class_names=None, detailed
 
     all_preds = []
     all_targets = []
+    all_subject_ids = []
 
     for batch_idx, (modalities_tuple, target_cpu) in enumerate(metric_logger.log_every(data_loader, 10, header)):
         octa_images_dev = modalities_tuple[0].to(device, non_blocking=True)
@@ -124,6 +125,15 @@ def evaluate(data_loader, model, device, num_classes, class_names=None, detailed
         preds = torch.argmax(output, dim=1)
         all_preds.extend(preds.cpu().numpy())
         all_targets.extend(target_dev.cpu().numpy())
+        
+        # Subject ID'leri topla
+        if return_predictions:
+            batch_size = target_cpu.shape[0]
+            start_idx = batch_idx * data_loader.batch_size
+            for i in range(batch_size):
+                sample_idx = start_idx + i
+                if sample_idx < len(data_loader.dataset.ids):
+                    all_subject_ids.append(data_loader.dataset.ids[sample_idx])
 
         batch_size = octa_images_dev.shape[0]
         metric_logger.update(loss=loss.item())
@@ -163,5 +173,10 @@ def evaluate(data_loader, model, device, num_classes, class_names=None, detailed
     if detailed_report: # Sadece detaylı raporda sklearn acc'sini ayrıca belirtelim
         print(f"* Overall Accuracy (from sklearn) {eval_stats.get('overall_accuracy_sklearn', 0):.3f}")
 
+    # Return predictions if requested
+    if return_predictions:
+        eval_stats['predictions'] = all_preds_np
+        eval_stats['targets'] = all_targets_np
+        eval_stats['subject_ids'] = all_subject_ids
 
     return eval_stats
