@@ -599,6 +599,18 @@ def main(args):
                 log_writer.flush()
             with open(os.path.join(args.output_dir, "log.txt"), mode="a", encoding="utf-8") as f:
                 f.write(json.dumps(log_stats_dict) + "\n")
+            # Save all metrics in a human-readable format for each epoch
+            metrics_txt_file = os.path.join(args.output_dir, "epoch_metrics.txt")
+            with open(metrics_txt_file, mode="a", encoding="utf-8") as f:
+                f.write(f"Epoch {epoch}\n")
+                f.write("Train metrics:\n")
+                for k, v in train_stats.items():
+                    f.write(f"  {k}: {v}\n")
+                f.write("Val metrics:\n")
+                for k, v in val_stats.items():
+                    if not isinstance(v, np.ndarray) and k != 'classification_report_str':
+                        f.write(f"  {k}: {v}\n")
+                f.write("-" * 40 + "\n")
 
     total_time = time.time() - start_time
     total_time_str = str(datetime.timedelta(seconds=int(total_time)))
