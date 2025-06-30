@@ -544,9 +544,11 @@ def main(args):
         )
         
         # Eğitim sırasında sadece temel metrikler için evaluate çağır
-        val_stats = evaluate(data_loader_val, model, device,
-                             num_classes=args.nb_classes, class_names=class_names, 
-                             detailed_report=False) # <<< DETAILED REPORT FALSE
+        val_stats = evaluate(
+            data_loader_val, model, device,
+            num_classes=args.nb_classes, class_names=class_names,
+            detailed_report=True, return_predictions=True
+        )
         
         current_accuracy_val = val_stats.get('overall_accuracy_sklearn', val_stats.get('acc1', 0))
         print(f"Validation Accuracy (epoch {epoch}): {current_accuracy_val * 100:.2f}% (Loss: {val_stats.get('loss', 0):.4f})")
@@ -610,7 +612,18 @@ def main(args):
                 for k, v in val_stats.items():
                     if not isinstance(v, np.ndarray) and k != 'classification_report_str':
                         f.write(f"  {k}: {v}\n")
-                f.write("-" * 40 + "\n")
+                # True labels
+                if 'targets' in val_stats:
+                    f.write("True labels: " + ','.join(str(x) for x in val_stats['targets']) + "\n")
+                # Predicted labels
+                if 'predictions' in val_stats:
+                    f.write("Predicted labels: " + ','.join(str(x) for x in val_stats['predictions']) + "\n")
+                # Predicted probas
+                if 'predicted_probas' in val_stats:
+                    f.write("Predicted probas (rows: samples, cols: classes):\n")
+                    for row in val_stats['predicted_probas']:
+                        f.write(','.join(f"{v:.6f}" for v in row) + "\n")
+                f.write("-" * 24 + "\n")
 
     total_time = time.time() - start_time
     total_time_str = str(datetime.timedelta(seconds=int(total_time)))

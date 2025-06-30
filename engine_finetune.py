@@ -110,7 +110,7 @@ def evaluate(data_loader, model, device, num_classes, class_names=None, detailed
     all_preds = []
     all_targets = []
     all_subject_ids = []
-
+    all_probas = []
     for batch_idx, (modalities_tuple, target_cpu) in enumerate(metric_logger.log_every(data_loader, 10, header)):
         octa_images_dev = modalities_tuple[0].to(device, non_blocking=True)
         bscan_images_dev = modalities_tuple[1].to(device, non_blocking=True)
@@ -125,6 +125,9 @@ def evaluate(data_loader, model, device, num_classes, class_names=None, detailed
         preds = torch.argmax(output, dim=1)
         all_preds.extend(preds.cpu().numpy())
         all_targets.extend(target_dev.cpu().numpy())
+        # Save softmax probabilities for each sample
+        probas = torch.softmax(output, dim=1)
+        all_probas.extend(probas.cpu().numpy())
         
         # Subject ID'leri topla
         if return_predictions:
@@ -144,6 +147,7 @@ def evaluate(data_loader, model, device, num_classes, class_names=None, detailed
 
     all_preds_np = np.array(all_preds)
     all_targets_np = np.array(all_targets)
+    all_probas_np = np.array(all_probas)
     overall_accuracy = accuracy_score(all_targets_np, all_preds_np)
 
     eval_stats = {k: meter.global_avg for k, meter in metric_logger.meters.items()}
@@ -178,5 +182,6 @@ def evaluate(data_loader, model, device, num_classes, class_names=None, detailed
         eval_stats['predictions'] = all_preds_np
         eval_stats['targets'] = all_targets_np
         eval_stats['subject_ids'] = all_subject_ids
+        eval_stats['predicted_probas'] = all_probas_np
 
     return eval_stats
