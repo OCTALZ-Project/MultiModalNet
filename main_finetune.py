@@ -33,6 +33,38 @@ from sklearn.metrics import classification_report, confusion_matrix, accuracy_sc
 import seaborn as sns
 import matplotlib.pyplot as plt
 import pandas as pd
+from torch.nn import functional as F
+
+class FocalLoss(torch.nn.Module):
+    def __init__(self, gamma=2.0, alpha=None, reduction='mean'):
+        super(FocalLoss, self).__init__()
+        self.gamma = gamma
+        self.alpha = alpha
+        self.reduction = reduction
+
+    def forward(self, input, target):
+        if input.dim() > 2:
+            input = input.view(input.size(0), input.size(1), -1)
+            input = input.transpose(1, 2)
+            input = input.contiguous().view(-1, input.size(2))
+        target = target.view(-1, 1)
+        logpt = F.log_softmax(input, dim=1)
+        logpt = logpt.gather(1, target)
+        logpt = logpt.view(-1)
+        pt = logpt.exp()
+        if self.alpha is not None:
+            if isinstance(self.alpha, (float, int)):
+                at = torch.full_like(pt, self.alpha)
+            else:
+                at = self.alpha.gather(0, target.view(-1))
+            logpt = logpt * at
+        loss = -1 * (1 - pt) ** self.gamma * logpt
+        if self.reduction == 'mean':
+            return loss.mean()
+        elif self.reduction == 'sum':
+            return loss.sum()
+        else:
+            return loss
 
 def get_args_parser():
     parser = argparse.ArgumentParser('Multi-modal fine-tuning for image classification', add_help=False)
@@ -50,7 +82,7 @@ def get_args_parser():
                         help='Dropout rate applied after B-scan encoder (default: 0.0, no dropout)')
     parser.add_argument('--bscan_model_finetune', default='', type=str,
                         help='Finetune B-scan encoder from this checkpoint path. If empty, uses ImageNet weights.')
-    parser.add_argument('--projection_maps_model', default='resnet50', type=str, choices=['resnet50', 'resnet101', 'resnet152', 'alexnet', 'dino_vit'],
+    parser.add_argument('--projection_maps_model', default='resnet50', type=str, choices=['resnet18', 'resnet34', 'resnet50', 'resnet101', 'resnet152', 'alexnet', 'dino_vit'],
                         help='ResNet architecture to use for OCTA encoding (resnet50, resnet101, resnet152, alexnet, dino_vit)')
     parser.add_argument('--projection_maps_model_dropout', type=float, default=0.0,
                         help='Dropout rate applied after ResNet feature extraction (default: 0.0, no dropout)')
@@ -142,12 +174,21 @@ def get_args_parser():
     parser.add_argument('--save_args', type=str, nargs='+', 
                         default=['batch_size', 'epochs', 'bscan_model_name', 'bscan_model_finetune', 'projection_maps_model', 'projection_maps_model_dropout', 
                                 'projection_maps_model_finetune', 'bscan_model_drop_path_rate', 'bscan_model_global_pool', 'clip_grad', 'bscan_model_drop_path_rate', 
-                                'weight_decay', 'lr', 'blr', 'data_path', 'nb_classes', 'seed', 'resume', 'use_tensorboard'],
+                                'weight_decay', 'lr', 'blr', 'data_path', 'nb_classes', 'seed', 'resume', 'use_tensorboard', 'train_only_bscan', 'train_only_projection', 'loss_type', 'focal_gamma', 'focal_alpha'],
                         help='List of argument names to save to args.txt file (empty list to save all)')
     
     # Add TensorBoard logging control
     parser.add_argument('--use_tensorboard', action='store_true', default=False,
                         help='Use TensorBoard for logging training progress')
+    # Add train_only_bscan and train_only_projection flags
+    parser.add_argument('--train_only_bscan', action='store_true', default=False,
+                        help='Train using only B-scan modality (ignore projections)')
+    parser.add_argument('--train_only_projection', action='store_true', default=False,
+                        help='Train using only projection (OCTA) modality (ignore B-scan)')
+    parser.add_argument('--loss_type', type=str, default='cross_entropy', choices=['cross_entropy', 'label_smoothing', 'soft_target', 'focal_loss'],
+                        help='Loss function to use: cross_entropy, label_smoothing, soft_target, focal')
+    parser.add_argument('--focal_gamma', type=float, default=2.0, help='Gamma parameter for Focal Loss')
+    parser.add_argument('--focal_alpha', type=float, default=1.0, help='Alpha parameter for Focal Loss (None for no class weighting)')
     return parser
 
 def plot_confusion_matrix(cm, class_names, output_path="confusion_matrix.png"):
@@ -262,14 +303,16 @@ def main(args):
     dataset_train = OCTAMultiModalDataset(
         data_dir=train_data_path,
         num_classes=args.nb_classes,
-        octa_transform=transform_train,
-        bscan_transform=transform_train
+        projection_transform=transform_train,
+        bscan_transform=transform_train,
+        input_size=args.input_size
     )
     dataset_val = OCTAMultiModalDataset(
         data_dir=val_data_path,
         num_classes=args.nb_classes,
-        octa_transform=transform_val,
-        bscan_transform=transform_val
+        projection_transform=transform_val,
+        bscan_transform=transform_val,
+        input_size=args.input_size
     )
 
     class_names = None
@@ -383,7 +426,9 @@ def main(args):
         bscan_model_input_size=args.input_size,
         projection_maps_model=args.projection_maps_model,
         projection_maps_model_dropout=args.projection_maps_model_dropout,
-        bscan_model_dropout=args.bscan_model_dropout
+        bscan_model_dropout=args.bscan_model_dropout,
+        train_only_bscan=getattr(args, 'train_only_bscan', False),
+        train_only_projection=getattr(args, 'train_only_projection', False)
     )
     model.to(device)
     model_without_ddp = model
@@ -413,10 +458,12 @@ def main(args):
     optimizer = torch.optim.AdamW(param_groups)
     loss_scaler = NativeScaler()
 
-    if mixup_fn is not None:
+    if args.loss_type == 'soft_target' and mixup_fn is not None:
         criterion = SoftTargetCrossEntropy()
-    elif args.smoothing > 0.:
+    elif args.loss_type == 'label_smoothing' or (args.loss_type == 'cross_entropy' and args.smoothing > 0.):
         criterion = LabelSmoothingCrossEntropy(smoothing=args.smoothing)
+    elif args.loss_type == 'focal_loss':
+        criterion = FocalLoss(gamma=args.focal_gamma, alpha=args.focal_alpha)
     else:
         criterion = torch.nn.CrossEntropyLoss()
     print("Criterion = %s" % str(criterion))

@@ -4,6 +4,8 @@ import re
 import numpy as np
 import shutil
 import sys
+import argparse
+from datetime import datetime
 
 def parse_accuracy_from_report(report_path):
     """Parses accuracy from the classification report file."""
@@ -22,56 +24,101 @@ def parse_accuracy_from_report(report_path):
     return None
 
 def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--majority_vote', action='store_true', default=False, help='Run majority vote report after each fold and at the end')
+    args, unknown = parser.parse_known_args()
+
     # Base command arguments (excluding fold-specific ones)
     base_executable = 'python' # or 'python3' depending on your environment
     script_to_run = 'main_finetune.py'
     
+    # Base dataset path
+    base_data_path = "/home/omerfarukaydin/Data/folds/kfold_dataset_for_3_years"
+
+    # Automatically determine number of classes from the first fold's train directory
+    def get_num_classes_from_fold(fold_dir):
+        train_dir = os.path.join(fold_dir, 'train')
+        if not os.path.isdir(train_dir):
+            # Try without 'train' subdir (if structure is flat)
+            train_dir = fold_dir
+        if not os.path.isdir(train_dir):
+            raise RuntimeError(f"Train directory not found: {train_dir}")
+        class_dirs = [d for d in os.listdir(train_dir) if os.path.isdir(os.path.join(train_dir, d))]
+        return len(class_dirs)
+
+    # Dynamically find all fold directories
+    fold_dirs = [d for d in os.listdir(base_data_path) if os.path.isdir(os.path.join(base_data_path, d)) and d.startswith('fold_')]
+    # Extract fold numbers and sort
+    fold_tuples = []
+    for d in fold_dirs:
+        try:
+            fold_num = int(re.findall(r'fold_(\d+)', d)[0])
+            fold_tuples.append((fold_num, d))
+        except Exception:
+            continue
+    fold_tuples.sort()  # sort by fold number
+    if not fold_tuples:
+        print(f"No fold directories found in {base_data_path}")
+        return
+
+    # Get number of classes from the first fold
+    first_fold_path = os.path.join(base_data_path, fold_tuples[0][1])
+    num_classes = get_num_classes_from_fold(first_fold_path)
+    print(f"Detected number of classes: {num_classes}")
+
     base_args = [
-        '--batch_size', '32',
+        '--batch_size', '6',
         '--epochs', '100',
         '--blr', '5e-4',
         '--layer_decay', '0.75',
         '--weight_decay', '0.05',
         '--clip_grad', '1.0',
         '--warmup_epochs', '5',
-        '--nb_classes', '2',
+        '--nb_classes', str(num_classes),
         '--bscan_model_global_pool', 'avg',
         '--num_workers', '4',
         '--pin_mem',
         '--projection_maps_model_dropout', '0.15',
-        '--projection_maps_model', 'resnet152',
+        '--projection_maps_model', 'resnet101',
         '--bscan_model_dropout', '0.15',
-        '--bscan_model_name', 'resnet152',
+        '--bscan_model_name', 'vit_large_patch16',
+        '--loss_type', 'focal_loss',
         '--use_tensorboard'
     ]
 
-    # Base dataset path
-    base_data_path = "/home/omerfarukaydin/Desktop/ad-reduced-cn-5-fold-dataset"
-
     # Base output and log directory (added _py to distinguish from shell script outputs)
-    base_output_log_prefix = "FINETUNE/2025-06-02-resnet152-both-ad-cn-OCT-augmented-both"
+    now_str = datetime.now().strftime("%Y-%m-%d-%H%M%S")
+    base_output_log_prefix = f"FINETUNE/{now_str}_3_years_b_oct_resnet101_vitL"
 
-    # Number of folds
-    num_folds = 5  # Set to 5 for your kfold_dataset structure
-
+    # Dynamically find all fold directories
+    fold_dirs = [d for d in os.listdir(base_data_path) if os.path.isdir(os.path.join(base_data_path, d)) and d.startswith('fold_')]
+    # Extract fold numbers and sort
+    fold_tuples = []
+    for d in fold_dirs:
+        try:
+            fold_num = int(re.findall(r'fold_(\d+)', d)[0])
+            fold_tuples.append((fold_num, d))
+        except Exception:
+            continue
+    fold_tuples.sort()  # sort by fold number
+    if not fold_tuples:
+        print(f"No fold directories found in {base_data_path}")
+        return
     all_fold_accuracies = []
     fold_report_paths = {}
     fold_prediction_csvs = {}
 
-    print(f"Starting k-fold cross-validation for {num_folds} folds...")
+    print(f"Starting k-fold cross-validation for {len(fold_tuples)} folds...")
     print(f"Base output directory: {base_output_log_prefix}\n")
 
-    for i in range(1, num_folds+1):
-        fold_num = i
+    for fold_num, fold_dir_name in fold_tuples:
         print(f"----------------------------------------------------")
         print(f"Processing FOLD {fold_num}")
         print(f"----------------------------------------------------")
 
-        current_data_path = os.path.join(base_data_path, f"fold_{fold_num}")
-        # Output structure: ./13_05_2025_avg_pool_py/fold_1/model
-        current_output_dir = os.path.join(base_output_log_prefix, f"fold_{fold_num}", "model")
-        # Log structure: ./13_05_2025_avg_pool_py/fold_1/logs
-        current_log_dir = os.path.join(base_output_log_prefix, f"fold_{fold_num}", "logs")
+        current_data_path = os.path.join(base_data_path, fold_dir_name)
+        current_output_dir = os.path.join(base_output_log_prefix, f"{fold_dir_name}", "model")
+        current_log_dir = os.path.join(base_output_log_prefix, f"{fold_dir_name}", "logs")
 
         # Create output and log directories if they don't exist
         os.makedirs(current_output_dir, exist_ok=True)
@@ -146,61 +193,64 @@ def main():
     if all_fold_accuracies:
         mean_accuracy = np.mean(all_fold_accuracies)
         std_accuracy = np.std(all_fold_accuracies)
-        print(f"Number of folds processed successfully for accuracy: {len(all_fold_accuracies)}/{num_folds}")
+        print(f"Number of folds processed successfully for accuracy: {len(all_fold_accuracies)}/{len(fold_tuples)}")
         print("\nIndividual Fold Accuracies:")
-        for i, acc in enumerate(all_fold_accuracies):
-            print(f"  Fold {i+1}: {acc:.4f} (Report: {fold_report_paths.get(i+1, 'N/A')})")
+        for i, (fold_num, _) in enumerate(fold_tuples):
+            acc = None
+            if fold_num in fold_report_paths:
+                acc = parse_accuracy_from_report(fold_report_paths[fold_num])
+            print(f"  Fold {fold_num}: {acc if acc is not None else 'N/A'} (Report: {fold_report_paths.get(fold_num, 'N/A')})")
         print(f"\nMean Accuracy across folds: {mean_accuracy:.4f}")
         print(f"Standard Deviation of Accuracy across folds: {std_accuracy:.4f}")
         consolidated_report_path = os.path.join(base_output_log_prefix, "consolidated_kfold_report.txt")
         with open(consolidated_report_path, 'w', encoding='utf-8') as outfile:
             outfile.write("K-Fold Cross-Validation Consolidated Report\n")
             outfile.write("=============================================\n\n")
-            for fold_idx in range(0, num_folds):
-                report_path = fold_report_paths.get(fold_idx)
+            for fold_num, _ in fold_tuples:
+                report_path = fold_report_paths.get(fold_num)
                 if report_path and os.path.exists(report_path):
-                    outfile.write(f"--- Fold {fold_idx} Results (from: {report_path}) ---\n")
+                    outfile.write(f"--- Fold {fold_num} Results (from: {report_path}) ---\n")
                     try:
                         with open(report_path, 'r', encoding='utf-8') as infile:
                             shutil.copyfileobj(infile, outfile)
                         outfile.write("\n\n")
                     except Exception as e:
-                        outfile.write(f"Error reading report for fold {fold_idx}: {e}\n\n")
+                        outfile.write(f"Error reading report for fold {fold_num}: {e}\n\n")
                 else:
-                    outfile.write(f"--- Report for Fold {fold_idx} not found or not processed ---\n\n")
+                    outfile.write(f"--- Report for Fold {fold_num} not found or not processed ---\n\n")
             outfile.write("\n--- Overall Metrics ---\n")
             outfile.write(f"Mean Accuracy: {mean_accuracy:.4f}\n")
             outfile.write(f"Standard Deviation of Accuracy: {std_accuracy:.4f}\n")
             # Add prediction CSV summary
             outfile.write("\n--- Prediction CSVs per Fold ---\n")
-            for fold_idx in range(0, num_folds):
-                pred_csv = fold_prediction_csvs.get(fold_idx)
+            for fold_num, _ in fold_tuples:
+                pred_csv = fold_prediction_csvs.get(fold_num)
                 if pred_csv and os.path.exists(pred_csv):
-                    outfile.write(f"Fold {fold_idx}: {pred_csv}\n")
+                    outfile.write(f"Fold {fold_num}: {pred_csv}\n")
                 else:
-                    outfile.write(f"Fold {fold_idx}: No prediction CSV found.\n")
+                    outfile.write(f"Fold {fold_num}: No prediction CSV found.\n")
         print(f"\nConsolidated report saved to: {consolidated_report_path}")
     else:
         print("\nNo accuracies were recorded. Overall results cannot be calculated.")
         print("Please check the output of each fold for errors.")
     print("\nAll k-fold finetuning runs completed.")
 
-    # Her fold bittikten sonra majority vote raporu oluştur
-    mv_script = os.path.join(os.path.dirname(__file__), 'majority_vote_report.py')
-    for i in range(1, num_folds+1):
-        fold_dir = os.path.join(base_output_log_prefix, f"fold_{i}")
-        print(f"\nRunning majority_vote_report.py for {fold_dir}")
+    # Her fold bittikten sonra majority vote raporu oluştur (opsiyonel)
+    if args.majority_vote:
+        mv_script = os.path.join(os.path.dirname(__file__), 'majority_vote_report.py')
+        for fold_num, fold_dir_name in fold_tuples:
+            fold_dir = os.path.join(base_output_log_prefix, fold_dir_name)
+            print(f"\nRunning majority_vote_report.py for {fold_dir}")
+            subprocess.run([
+                sys.executable, mv_script,
+                '--input_path', fold_dir
+            ], check=True)
+        # Tüm foldlar bitince genel majority vote raporu oluştur
+        print(f"\nRunning majority_vote_report.py for all folds in {base_output_log_prefix}")
         subprocess.run([
             sys.executable, mv_script,
-            '--input_path', fold_dir
+            '--input_path', base_output_log_prefix
         ], check=True)
-
-    # Tüm foldlar bitince genel majority vote raporu oluştur
-    print(f"\nRunning majority_vote_report.py for all folds in {base_output_log_prefix}")
-    subprocess.run([
-        sys.executable, mv_script,
-        '--input_path', base_output_log_prefix
-    ], check=True)
 
 if __name__ == '__main__':
     # Ensure that 'main_finetune.py' is in the same directory or in PATH,

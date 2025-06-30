@@ -27,6 +27,16 @@ class ResNetEncoder(nn.Module):
             imagenet_weights = ResNet152_Weights.IMAGENET1K_V1
             self.feature_dim = self.encoder.fc.in_features
             print("Using ResNet152 architecture for encoding")
+        elif model_type == 'resnet34':
+            self.encoder = models.resnet34(weights=None)
+            imagenet_weights = None
+            self.feature_dim = self.encoder.fc.in_features
+            print("Using ResNet34 architecture for encoding")
+        elif model_type == 'resnet18':
+            self.encoder = models.resnet18(weights=None)
+            imagenet_weights = None
+            self.feature_dim = self.encoder.fc.in_features
+            print("Using ResNet18 architecture for encoding")
         else:
             raise ValueError(f"Unsupported ResNet model: {model_type}. Choose 'resnet50', 'resnet101', or 'resnet152'.")
             

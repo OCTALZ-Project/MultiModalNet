@@ -6,8 +6,8 @@ from torchvision import transforms
 from collections import Counter
 
 class OCTAMultiModalDataset(Dataset):
-    def __init__(self, data_dir, num_classes, octa_transform=None, bscan_transform=None,
-                 class_name_map=None, verbose=False):
+    def __init__(self, data_dir, num_classes, projection_transform=None, bscan_transform=None,
+                 class_name_map=None, verbose=False, input_size=224):
         """
         Initializes the dataset loader.
         Args:
@@ -15,7 +15,7 @@ class OCTAMultiModalDataset(Dataset):
             num_classes (int): Number of target classes. The dataset will attempt to find this many
                                classes in the directory structure. If the number doesn't match,
                                a warning will be displayed.
-            octa_transform (callable, optional): Optional transform to be applied on OCTA tensor.
+            projection_transform (callable, optional): Optional transform to be applied on projection tensor.
             bscan_transform (callable, optional): Optional transform to be applied on B-scan tensor.
             class_name_map (dict, optional): A dictionary to map directory names on disk
                                             to the desired class names.
@@ -23,13 +23,15 @@ class OCTAMultiModalDataset(Dataset):
                                             If None or a directory name is not in the map,
                                             the directory name itself (uppercased) is used as the class name.
             verbose (bool, optional): If True, print detailed information during dataset loading.
+            input_size (int, optional): Desired image size for resizing (default: 224)
         """
         self.data_dir = data_dir
-        self.octa_transform = octa_transform
+        self.projection_transform = projection_transform
         self.bscan_transform = bscan_transform
         self.num_classes = num_classes
         self.class_name_map = class_name_map if class_name_map else {}
         self.verbose = verbose
+        self.input_size = input_size
         # Supported image extensions
         self.supported_extensions = ['.bmp', '.png', '.jpg', '.jpeg']
 
@@ -59,7 +61,7 @@ class OCTAMultiModalDataset(Dataset):
         self.labels = {} # Stores final mapped label for each subject_id
         self.subject_bscan_files = {}
         self.subject_full_paths = {} # Stores full path to subject directory
-        self.octa_files = {} # Stores paths to OCTA files for each subject
+        self.projection_files = {} # Stores paths to projection files for each subject
 
         if self.verbose:
             print(f"Loading data from directory: {self.data_dir} for {self.num_classes} classes.")
@@ -107,8 +109,8 @@ class OCTAMultiModalDataset(Dataset):
                     continue
                 
                 # Check for OCTA files with any supported extension
-                octa_files = self._find_octa_files(projection_dir, subject_id_str)
-                if not octa_files or len(octa_files) != 3:
+                projection_files = self._find_projection_files(projection_dir, subject_id_str)
+                if not projection_files or len(projection_files) != 3:
                     if self.verbose:
                         print(f"    Warning: Could not find suitable projection files for ID {subject_id_str} in {projection_dir}. Skipping.")
                     continue
@@ -133,25 +135,24 @@ class OCTAMultiModalDataset(Dataset):
                 self.labels[subject_id_str] = target_class_name # Store the mapped class name
                 self.subject_bscan_files[subject_id_str] = [os.path.basename(f) for f in bscan_files]
                 self.subject_full_paths[subject_id_str] = subject_path
-                self.octa_files[subject_id_str] = octa_files
+                self.projection_files[subject_id_str] = projection_files
                 if self.verbose:
                     # Get the types of projection files (specific OCTA or generic)
                     projection_types = []
-                    for path in octa_files:
+                    for path in projection_files:
                         filename = os.path.basename(path)
-                        if "OCTA(FULL)" in filename:
+                        if "(FULL)" in filename:
                             projection_types.append("FULL")
-                        elif "OCTA(ILM_OPL)" in filename:
+                        elif "(ILM_OPL)" in filename:
                             projection_types.append("ILM_OPL")
-                        elif "OCTA(OPL_BM)" in filename:
+                        elif "(OPL_BM)" in filename:
                             projection_types.append("OPL_BM")
                         else:
                             projection_types.append("Generic")
-                    
                     if len(set(projection_types)) == 1 and projection_types[0] == "Generic":
                         print(f"      Added subject: {subject_id_str} with label '{target_class_name}' (using generic projection)")
                     else:
-                        print(f"      Added subject: {subject_id_str} with label '{target_class_name}' (using specific OCTA projections)")
+                        print(f"      Added subject: {subject_id_str} with label '{target_class_name}' (using specific projections)")
 
         if not self.ids:
             print(f"Warning: No valid samples found in {self.data_dir} matching the criteria for {self.num_classes} classes.")
@@ -160,13 +161,13 @@ class OCTAMultiModalDataset(Dataset):
             print(f"Total {len(self.ids)} valid samples found and loaded.")
             print(f"Class distribution in this dataset: {Counter(self.labels.values())}")
 
-    def _find_octa_files(self, projection_dir, subject_id_str):
-        """Find OCTA files with any supported extension in the projection directory.
+    def _find_projection_files(self, projection_dir, subject_id_str):
+        """Find projection files with any supported extension in the projection directory.
         
-        If specific OCTA files (FULL, ILM_OPL, OPL_BM) are found, they are returned.
+        If specific projection files (FULL, ILM_OPL, OPL_BM) are found, they are returned.
         If only a single generic projection file is found, it is used for all three channels.
         """
-        octa_files = {'OCTA(FULL)': None, 'OCTA(ILM_OPL)': None, 'OCTA(OPL_BM)': None}
+        projection_keys = {'FULL': None, 'ILM_OPL': None, 'OPL_BM': None}
         
         # List all files in the projection directory
         files_in_dir = [f for f in os.listdir(projection_dir) 
@@ -178,18 +179,18 @@ class OCTAMultiModalDataset(Dataset):
             file_path = os.path.join(projection_dir, filename)
                 
             # Check if the file matches any OCTA pattern
-            for pattern in octa_files.keys():
-                if pattern in filename and subject_id_str in filename:
-                    octa_files[pattern] = file_path
+            for key in projection_keys.keys():
+                if f"({key})" in filename and subject_id_str in filename:
+                    projection_keys[key] = file_path
                     break
         
         # If all three specific OCTA files were found, return them
-        if all(octa_files.values()):
-            return list(octa_files.values())
+        if all(projection_keys.values()):
+            return list(projection_keys.values())
         
         # If not all specific OCTA files were found, look for a single generic projection file
         # Common names for generic projection files
-        generic_names = ['projection', 'oct', 'scan', 'image', 'octa']
+        generic_names = ['projection', 'oct', 'scan', 'image']
         
         # Reset and look for a generic projection file
         generic_projection = None
@@ -223,7 +224,7 @@ class OCTAMultiModalDataset(Dataset):
             # Check if the file has a supported extension
             if any(filename.lower().endswith(ext) for ext in self.supported_extensions):
                 try:
-                    # Try to parse the filename as a number (typical for B-scans like 185.bmp)
+                    # Try to parse the filename as a number (typical for B-scan like 185.bmp)
                     int(os.path.splitext(filename)[0])
                     bscan_files.append(file_path)
                 except ValueError:
@@ -240,56 +241,51 @@ class OCTAMultiModalDataset(Dataset):
         # Retrieve the pre-calculated full path to the subject's directory
         subject_dir = self.subject_full_paths[subject_id]
         
-        to_tensor = transforms.ToTensor() # Basic conversion to tensor if no other transform
-
-        # --- Load OCTA images from saved paths ---
+        to_tensor = transforms.ToTensor()
+        resize = transforms.Resize((self.input_size, self.input_size))
+        # --- Load projection images from saved paths ---
         try:
-            octa_paths = self.octa_files[subject_id]
-            if len(octa_paths) != 3:
-                raise RuntimeError(f"Expected 3 OCTA/projection paths for subject {subject_id}, but found {len(octa_paths)}")
-
-            # Check if we're using a single generic projection (all paths are the same)
-            using_generic_projection = octa_paths[0] == octa_paths[1] == octa_paths[2]
+            projection_paths = self.projection_files[subject_id]
+            if len(projection_paths) != 3:
+                raise RuntimeError(f"Expected 3 projection paths for subject {subject_id}, but found {len(projection_paths)}")
+            using_generic_projection = projection_paths[0] == projection_paths[1] == projection_paths[2]
             if using_generic_projection and self.verbose:
-                print(f"Loading generic projection file for subject {subject_id}: {os.path.basename(octa_paths[0])}")
-
-            img_octa_full = Image.open(octa_paths[0]).convert('L')
-            img_octa_ilm_opl = Image.open(octa_paths[1]).convert('L')
-            img_octa_opl_bm = Image.open(octa_paths[2]).convert('L')
-
-            # Convert to tensor before stacking
-            t_octa_full = to_tensor(img_octa_full)
-            t_octa_ilm_opl = to_tensor(img_octa_ilm_opl)
-            t_octa_opl_bm = to_tensor(img_octa_opl_bm)
-            
-            octa_image_tensor = torch.cat([t_octa_full, t_octa_ilm_opl, t_octa_opl_bm], dim=0)
+                print(f"Loading generic projection file for subject {subject_id}: {os.path.basename(projection_paths[0])}")
+            img_projection_full = Image.open(projection_paths[0]).convert('L')
+            img_projection_ilm_opl = Image.open(projection_paths[1]).convert('L')
+            img_projection_opl_bm = Image.open(projection_paths[2]).convert('L')
+            # Resize before tensor
+            img_projection_full = resize(img_projection_full)
+            img_projection_ilm_opl = resize(img_projection_ilm_opl)
+            img_projection_opl_bm = resize(img_projection_opl_bm)
+            t_projection_full = to_tensor(img_projection_full)
+            t_projection_ilm_opl = to_tensor(img_projection_ilm_opl)
+            t_projection_opl_bm = to_tensor(img_projection_opl_bm)
+            projection_image_tensor = torch.cat([t_projection_full, t_projection_ilm_opl, t_projection_opl_bm], dim=0)
         except FileNotFoundError as e:
-            raise RuntimeError(f"Error loading projection/OCTA for ID {subject_id} from {subject_dir}: File not found - {e}")
+            raise RuntimeError(f"Error loading projection for ID {subject_id} from {subject_dir}: File not found - {e}")
         except Exception as e:
-            raise RuntimeError(f"Error loading or processing projection/OCTA for ID {subject_id} from {subject_dir}: {e}")
+            raise RuntimeError(f"Error loading or processing projection for ID {subject_id} from {subject_dir}: {e}")
 
         # --- Load B-scan images from the bscan subdirectory ---
         try:
             bscan_filenames = self.subject_bscan_files[subject_id]
             bscan_dir = os.path.join(subject_dir, "bscan")
-            
-            # Ensure we have exactly 3 B-scan filenames stored
             if len(bscan_filenames) != 3:
                 raise RuntimeError(f"Expected 3 B-scan filenames for subject {subject_id}, but found {len(bscan_filenames)}: {bscan_filenames}")
-
             bscan_1_path = os.path.join(bscan_dir, bscan_filenames[0])
             bscan_2_path = os.path.join(bscan_dir, bscan_filenames[1])
             bscan_3_path = os.path.join(bscan_dir, bscan_filenames[2])
-
             img_bscan_1 = Image.open(bscan_1_path).convert('L')
             img_bscan_2 = Image.open(bscan_2_path).convert('L')
             img_bscan_3 = Image.open(bscan_3_path).convert('L')
-
-            # Convert to tensor before stacking
+            # Resize before tensor
+            img_bscan_1 = resize(img_bscan_1)
+            img_bscan_2 = resize(img_bscan_2)
+            img_bscan_3 = resize(img_bscan_3)
             t_bscan_1 = to_tensor(img_bscan_1)
             t_bscan_2 = to_tensor(img_bscan_2)
             t_bscan_3 = to_tensor(img_bscan_3)
-
             bscan_image_tensor = torch.cat([t_bscan_1, t_bscan_2, t_bscan_3], dim=0)
         except FileNotFoundError as e:
             raise RuntimeError(f"Error loading B-scan for ID {subject_id} from {bscan_dir}: File not found - {e}")
@@ -297,12 +293,12 @@ class OCTAMultiModalDataset(Dataset):
             raise RuntimeError(f"Error loading or processing B-scan for ID {subject_id} from {bscan_dir}: {e}")
 
         # Apply transforms if they exist
-        if self.octa_transform:
-            octa_image_tensor = self.octa_transform(octa_image_tensor)
+        if self.projection_transform:
+            projection_image_tensor = self.projection_transform(projection_image_tensor)
         if self.bscan_transform:
             bscan_image_tensor = self.bscan_transform(bscan_image_tensor)
 
         class_name = self.labels[subject_id] # The class name for this subject
         label_idx = self.class_to_idx[class_name]
         
-        return (octa_image_tensor, bscan_image_tensor), label_idx
+        return (projection_image_tensor, bscan_image_tensor), label_idx
