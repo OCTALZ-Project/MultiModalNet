@@ -612,17 +612,14 @@ def main(args):
                 for k, v in val_stats.items():
                     if not isinstance(v, np.ndarray) and k != 'classification_report_str':
                         f.write(f"  {k}: {v}\n")
-                # True labels
-                if 'targets' in val_stats:
-                    f.write("True labels: " + ','.join(str(x) for x in val_stats['targets']) + "\n")
-                # Predicted labels
-                if 'predictions' in val_stats:
-                    f.write("Predicted labels: " + ','.join(str(x) for x in val_stats['predictions']) + "\n")
-                # Predicted probas
-                if 'predicted_probas' in val_stats:
+                # Save subject_ids, true labels, predicted labels, and predicted probas for this epoch if available
+                if 'subject_ids' in val_stats and 'targets' in val_stats and 'predictions' in val_stats and 'predicted_probas' in val_stats:
+                    f.write(f"  subject_ids: {list(val_stats['subject_ids'])}\n")
+                    f.write("True labels: " + ",".join(str(x) for x in val_stats['targets']) + "\n")
+                    f.write("Predicted labels: " + ",".join(str(x) for x in val_stats['predictions']) + "\n")
                     f.write("Predicted probas (rows: samples, cols: classes):\n")
                     for row in val_stats['predicted_probas']:
-                        f.write(','.join(f"{v:.6f}" for v in row) + "\n")
+                        f.write(",".join(f"{x:.6f}" for x in row) + "\n")
                 f.write("-" * 24 + "\n")
 
     total_time = time.time() - start_time
