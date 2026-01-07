@@ -33,7 +33,7 @@ def main():
     script_to_run = 'main_finetune.py'
     
     # Base dataset path
-    base_data_path = "/home/omerfarukaydin/Data/folds/kfold_dataset_for_3_years"
+    base_data_path = "/home/omerfarukaydin/Data/folds/kfold_dataset_p_octa_b_oct"
 
     # Automatically determine number of classes from the first fold's train directory
     def get_num_classes_from_fold(fold_dir):
@@ -67,13 +67,11 @@ def main():
     print(f"Detected number of classes: {num_classes}")
 
     base_args = [
-        '--batch_size', '6',
-        '--epochs', '100',
+        '--batch_size', '32',
+        '--epochs', '50',
         '--blr', '5e-4',
         '--layer_decay', '0.75',
         '--weight_decay', '0.05',
-        '--clip_grad', '1.0',
-        '--warmup_epochs', '5',
         '--nb_classes', str(num_classes),
         '--bscan_model_global_pool', 'avg',
         '--num_workers', '4',
@@ -88,7 +86,7 @@ def main():
 
     # Base output and log directory (added _py to distinguish from shell script outputs)
     now_str = datetime.now().strftime("%Y-%m-%d-%H%M%S")
-    base_output_log_prefix = f"FINETUNE/{now_str}_3_years_b_oct_resnet101_vitL"
+    base_output_log_prefix = f"FINETUNE/{now_str}_kfold_dataset_p_octa_b_oct"
 
     # Dynamically find all fold directories
     fold_dirs = [d for d in os.listdir(base_data_path) if os.path.isdir(os.path.join(base_data_path, d)) and d.startswith('fold_')]
